@@ -1,0 +1,14 @@
+{
+  "name": "Proxy_tg1_bot",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@tgcloud/cli": "^0.2.0"
+  },
+  "scripts": {
+    "deploy": "tgcloud push",
+    "status": "tgcloud status",
+    "run": "tgcloud run",
+    "smoke": "node scripts/smoke.mjs"
+  }
+}
