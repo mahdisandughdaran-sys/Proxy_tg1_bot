@@ -81,18 +81,21 @@ function lineFor(proxy, index) {
   if (proxy.handshake) bits.push('هندشیک');
   else if (proxy.probe === 'tcp') bits.push('پورت باز');
   if (proxy.resilience) bits.push(`مقاومت ${fa(proxy.resilience)}`);
-  if (proxy.latencyMs && proxy.latencyMs >= 20) bits.push(`تأخیر تست ${fa(proxy.latencyMs)}`);
+  if (proxy.latencyMs && proxy.latencyMs >= 5) bits.push(`تأخیر تست ${fa(proxy.latencyMs)}`);
   if (proxy.country) bits.push(proxy.country);
   const host = `${proxy.server}:${proxy.port}`;
   return [`<b>${fa(index)}.</b> ${esc(bits.join(' · '))}`, `<a href="${esc(proxy.link)}">${esc(host)}</a>`].join('\n');
 }
 
-function titles(mode, note) {
+function titles(mode, note, elite) {
   if (mode === 'socks') {
+    if (!elite) {
+      return ['SOCKS5', 'تست الیت این دور نبود. با احتیاط امتحان کن. صاحب این پروکسی کل ترافیک را می‌بیند.'];
+    }
     return ['SOCKS5 الیت', 'از تست Elite با تایم‌اوت ۳ ثانیه. برای تلگرام دکمهٔ وصل کافی است. این پروکسی کل ترافیک را می‌بیند.'];
   }
   if (mode === 'http') {
-    return ['وب‌پروکسی HTTP الیت', 'آدرس را در برنامه‌ای که HTTP proxy می‌خواهد وارد کن. تلگرام این نوع را با یک لمس وصل نمی‌کند.'];
+    return ['وب‌پروکسی HTTP الیت', 'آدرس را در برنامه‌ای که HTTP proxy می‌خواهد وارد کن. تلگرام این نوع را با یک لمس وصل نمی‌کند. صاحبش ترافیک را می‌بیند.'];
   }
   if (note === 'iran-tested' && mode === 'one') {
     return ['قوی‌ترین گزینهٔ این لحظه', 'FakeTLS که از داخل ایران به آن وصل شده‌اند. این یکی بالاترین امتیاز را دارد.'];
@@ -115,7 +118,8 @@ function titles(mode, note) {
 export function renderPack({ picked, mode, note, feed }) {
   const when = feed?.refreshedAt ? tehran(feed.refreshedAt) : 'همین حالا';
   const iran = feed?.iranCount ?? 0;
-  const [title, lead] = titles(mode, note);
+  const elite = picked.every((proxy) => proxy.handshake);
+  const [title, lead] = titles(mode, note, elite);
 
   if (!picked.length) {
     return {
@@ -125,6 +129,9 @@ export function renderPack({ picked, mode, note, feed }) {
   }
 
   const body = picked.map((proxy, index) => lineFor(proxy, index + 1)).join('\n\n');
+  const hint = mode === 'http'
+    ? 'آدرس را کپی کن. تلگرام برای HTTP دکمهٔ اتصال ندارد.'
+    : 'روی نام یا دکمهٔ وصل بزن تا تلگرام خودش پروکسی را روشن کند.';
   const text = [
     `<b>${esc(title)}</b>`,
     esc(lead),
@@ -132,9 +139,13 @@ export function renderPack({ picked, mode, note, feed }) {
     body,
     '',
     `سنجش ${esc(when)} · تست ایران ${fa(iran)}`,
-    'روی نام یا دکمهٔ وصل بزن تا تلگرام خودش پروکسی را روشن کند.',
+    feed?.busy ? 'سنجش دیگری در جریان است؛ این لیست ذخیره‌شده است.' : '',
+    hint,
+    'ربات کد ورود، رمز یا توکن نمی‌خواهد.',
     '<blockquote>پروکسی عمومی است. بانک و رمز را از روی آن رد نکن.</blockquote>',
-  ].join('\n');
+  ]
+    .filter(Boolean)
+    .join('\n');
 
   const rows = picked.map((proxy, index) => {
     const row = [];
@@ -142,8 +153,8 @@ export function renderPack({ picked, mode, note, feed }) {
       row.push({ text: `وصل ${fa(index + 1)} · ${shortHost(proxy.server)}`, url: proxy.link });
     }
     if (proxy.id) row.push({ text: 'نشد', callback_data: `b:${proxy.id}` });
-    return row.length ? row : [{ text: 'نشد', callback_data: `b:${proxy.id || 0}` }];
-  });
+    return row.length ? row : null;
+  }).filter(Boolean);
   const more =
     mode === 'iran' ? 'm:iran' : mode === 'one' ? 'm:one' : mode === 'socks' ? 'm:socks' : mode === 'http' ? 'm:http' : 'm:best';
   const refresh =
@@ -164,7 +175,7 @@ export function welcomeText(name) {
     '«پروکسی‌های جدید» پنج MTProto قوی است: اول FakeTLSهایی که از داخل ایران جواب داده‌اند.',
     'SOCKS5 با یک لمس داخل تلگرام روشن می‌شود. HTTP را باید دستی وارد کنی.',
     '',
-    'هر لینک، پروکسی را داخل خود تلگرام روشن می‌کند.',
+    'ربات ترافیک را از خودش رد نمی‌کند و کد ورود، رمز یا توکن نمی‌خواهد.',
     'اگر یکی وصل نشد «نشد» را بزن و دستهٔ بعدی را بگیر.',
   ].join('\n');
 }
@@ -180,10 +191,11 @@ export function helpText() {
     'وب — HTTP الیت. آدرس را کپی کن؛ دکمهٔ اتصال تلگرام ندارد.',
     'وضعیت تست — عمر لیست و نتیجهٔ هر منبع.',
     '',
-    '«نشد» آن مورد را در دورهای بعد پایین می‌برد.',
-    '«تازه‌سازی» منبع‌ها را همان لحظه دوباره می‌گیرد.',
+    '«نشد» آن مورد را در دورهای بعد پایین می‌برد. هر نفر برای هر پروکسی یک بار.',
+    '«تازه‌سازی» منبع‌ها را همان لحظه دوباره می‌گیرد و برای هر نفر هر سه دقیقه یک بار است.',
     'تأخیر، عدد تست منبع است نه پینگ گوشی تو.',
     'پروکسی عمومی را صاحبش می‌بیند. بانک و رمز را از روی آن رد نکن.',
+    'ربات هیچ‌وقت کد ورود یا توکن ربات نمی‌خواهد. آن را برای کسی نفرست.',
   ].join('\n');
 }
 

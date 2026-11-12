@@ -1,2 +1,6 @@
 .tgcloud/
 node_modules/
+.env
+.env.*
+*.pem
+*.token

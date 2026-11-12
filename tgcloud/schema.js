@@ -1,4 +1,4 @@
-import { table, integer, text, boolean, index } from 'sdk/db';
+import { table, integer, text, boolean, index, uniqueIndex } from 'sdk/db';
 
 export const proxies = table('proxies', {
   id: integer('id').primaryKey({ autoIncrement: true }),
@@ -26,10 +26,16 @@ export const readers = table('readers', {
   tgId: integer('tg_id').primaryKey(),
   cursorBest: integer('cursor_best').default(0),
   cursorIran: integer('cursor_iran').default(0),
+  cursorOne: integer('cursor_one').default(0),
   pulls: integer('pulls').default(0),
   firstName: text('first_name'),
   cursorSocks: integer('cursor_socks').default(0),
   cursorHttp: integer('cursor_http').default(0),
+  windowStart: integer('window_start').default(0),
+  hits: integer('hits').default(0),
+  lastForce: integer('last_force').default(0),
+  voteWindow: integer('vote_window').default(0),
+  voteHits: integer('vote_hits').default(0),
 });
 
 export const feed = table('feed', {
@@ -39,4 +45,16 @@ export const feed = table('feed', {
   totalSeen: integer('total_seen').default(0),
   kept: integer('kept').default(0),
   iranCount: integer('iran_count').default(0),
+  lockUntil: integer('lock_until').default(0),
+  lockToken: text('lock_token'),
+  globalWindow: integer('global_window').default(0),
+  globalHits: integer('global_hits').default(0),
 });
+
+export const ballots = table('ballots', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  tgId: integer('tg_id').notNull(),
+  proxyId: integer('proxy_id').notNull(),
+}, (t) => ({
+  once: uniqueIndex('uidx_ballot_once').on(t.tgId, t.proxyId),
+}));

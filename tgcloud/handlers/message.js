@@ -1,7 +1,8 @@
 import { api, BotApiError } from 'sdk';
 import { helpText, intent, mainKeyboard, statusText, welcomeText } from '../lib/copy.js';
 import { deliver } from '../lib/outgoing.js';
-import { ensureFresh, remember, statusSnapshot } from '../lib/service.js';
+import { actorId } from '../lib/guard.js';
+import { claimPack, ensureFresh, remember, statusSnapshot } from '../lib/service.js';
 
 async function send(chatId, text, extra = {}) {
   try {
@@ -21,11 +22,13 @@ async function send(chatId, text, extra = {}) {
 }
 
 export default async function (message) {
-  if (!message?.chat?.id) return;
+  if (!message?.chat?.id || !actorId(message.from)) return;
   const chatId = message.chat.id;
   const text = message.text || '';
   const action = intent(text);
   const isPrivate = message.chat.type === 'private';
+
+  if (!isPrivate && !text.trim().startsWith('/')) return;
 
   if (!text) {
     if (isPrivate) {
@@ -51,12 +54,22 @@ export default async function (message) {
     console.error('remember', error instanceof Error ? error.message : error);
   }
 
+  const markup = isPrivate ? { reply_markup: mainKeyboard() } : {};
+
+  if (action === 'start' || action === 'help' || action === 'status') {
+    const gate = await claimPack(message.from);
+    if (!gate.ok) {
+      await send(chatId, gate.text, markup);
+      return;
+    }
+  }
+
   if (action === 'start') {
-    await send(chatId, welcomeText(message.from?.first_name), { reply_markup: mainKeyboard() });
+    await send(chatId, welcomeText(message.from?.first_name), markup);
     return;
   }
   if (action === 'help') {
-    await send(chatId, helpText(), { reply_markup: mainKeyboard() });
+    await send(chatId, helpText(), markup);
     return;
   }
   if (action === 'status') {

@@ -1,7 +1,7 @@
 import { api, BotApiError } from 'sdk';
 import { toPlain } from './copy.js';
 import { renderPack } from './copy.js';
-import { ensureFresh, nextPack } from './service.js';
+import { claimPack, ensureFresh, nextPack } from './service.js';
 
 function describe(error) {
   if (error instanceof BotApiError) return error.description;
@@ -28,6 +28,14 @@ async function sendHtmlOrPlain(chatId, view) {
     return api.sendMessage({ ...base, text: toPlain(view.text) });
   }
 }
+
+const LOADER = {
+  socks: 'دارم SOCKS5های الیت را جدا می‌کنم…',
+  http: 'دارم وب‌پروکسی‌های الیت را جدا می‌کنم…',
+  iran: 'دارم سریع‌ترین‌های تست‌شده از ایران را جدا می‌کنم…',
+  one: 'دارم قوی‌ترین گزینه را جدا می‌کنم…',
+  best: 'دارم قوی‌ترین‌های تست‌شده از ایران را جدا می‌کنم…',
+};
 
 // A message sent with a reply keyboard cannot be edited ("message can't be edited").
 // The loader is sent bare so the result can replace it. If edit still fails, delete
@@ -62,32 +70,38 @@ export async function publish(chatId, loaderId, view) {
   await sendHtmlOrPlain(chatId, view);
 }
 
+function viewOf(pack, mode) {
+  const feed = pack.feed ? { ...pack.feed, busy: Boolean(pack.busy) } : null;
+  return renderPack({
+    picked: pack.picked,
+    mode,
+    note: pack.note,
+    feed,
+  });
+}
+
 export async function deliver(chatId, from, mode) {
+  const gate = await claimPack(from);
   let loaderId = null;
   try {
     const loader = await api.sendMessage({
       chat_id: chatId,
-      text: 'دارم قوی‌ترین‌های تست‌شده از ایران را جدا می‌کنم…',
+      text: gate.ok ? (LOADER[mode] || LOADER.best) : gate.text,
       link_preview_options: { is_disabled: true },
     });
     loaderId = loader?.message_id || null;
   } catch (error) {
     console.error('loader', describe(error));
   }
+  if (!gate.ok) return;
 
   try {
     const pack = await nextPack({
-      tgId: from?.id || chatId,
+      tgId: from?.id || 0,
       mode,
       count: mode === 'one' ? 1 : 5,
     });
-    const view = renderPack({
-      picked: pack.picked,
-      mode,
-      note: pack.note,
-      feed: pack.feed,
-    });
-    await publish(chatId, loaderId, view);
+    await publish(chatId, loaderId, viewOf(pack, mode));
   } catch (error) {
     console.error('deliver', describe(error));
     await publish(chatId, loaderId, {
@@ -98,17 +112,16 @@ export async function deliver(chatId, from, mode) {
 }
 
 export async function sendPack(chatId, from, mode, { force = false } = {}) {
+  const gate = await claimPack(from);
+  if (!gate.ok) {
+    await sendHtmlOrPlain(chatId, { text: gate.text, inline: [] });
+    return;
+  }
   if (force) await ensureFresh(true);
   const pack = await nextPack({
-    tgId: from?.id || chatId,
+    tgId: from?.id || 0,
     mode,
     count: mode === 'one' ? 1 : 5,
   });
-  const view = renderPack({
-    picked: pack.picked,
-    mode,
-    note: pack.note,
-    feed: pack.feed,
-  });
-  await sendHtmlOrPlain(chatId, view);
+  await sendHtmlOrPlain(chatId, viewOf(pack, mode));
 }

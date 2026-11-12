@@ -27,6 +27,13 @@ export const SOURCES = [
       "https://cdn.jsdelivr.net/gh/0xRadikal/Free-Telegram-Proxy@main/faketls/proxies.json",
     ],
   },
+  {
+    name: "stable",
+    urls: [
+      "https://raw.githubusercontent.com/0xRadikal/Free-Telegram-Proxy/main/stable/proxies.json",
+      "https://cdn.jsdelivr.net/gh/0xRadikal/Free-Telegram-Proxy@main/stable/proxies.json",
+    ],
+  },
 ];
 
 export const ENDPOINT_SOURCES = [
@@ -55,15 +62,17 @@ export const ENDPOINT_SOURCES = [
 export function parseEndpointList(name, text, kind) {
   const elite = name.endsWith("-elite");
   const out = [];
-  for (const raw of String(text || "").split(/\r?\n/)) {
-    const line = raw.trim();
+  const lines = String(text || "").split(/\r?\n/);
+  const cap = Math.min(lines.length, 5000);
+  for (let i = 0; i < cap; i += 1) {
+    const line = lines[i].trim();
     if (!line || line.startsWith("#")) continue;
     const parts = line.split(":");
     if (parts.length < 2) continue;
     const server = cleanServer(parts[0]);
     const port = Number(parts[1]);
     if (!server || !Number.isInteger(port) || port < 1 || port > 65535) continue;
-    const country = parts.length > 2 ? parts.slice(2).join(":").trim() : "";
+    const country = sanitizeCountry(parts.length > 2 ? parts.slice(2).join(":").trim() : "");
     const link =
       kind === "socks"
         ? `https://t.me/socks?server=${encodeURIComponent(server)}&port=${port}`
@@ -102,11 +111,25 @@ const TYPE_KIND = {
 
 export function inferKind(secret) {
   const s = String(secret || "").trim();
-  if (!/^[0-9a-fA-F]+$/.test(s) || s.length < 16 || s.length % 2 !== 0) return "plain";
+  if (!/^[0-9a-fA-F]+$/.test(s) || s.length < 32 || s.length % 2 !== 0) return "plain";
   const prefix = s.slice(0, 2).toLowerCase();
-  if (prefix === "ee") return "ee";
-  if (prefix === "dd") return "dd";
+  if (prefix === "ee" && s.length >= 34) return "ee";
+  if (prefix === "dd" && s.length >= 34) return "dd";
   return "plain";
+}
+
+export function isUsableSecret(secret) {
+  const s = String(secret || "").trim();
+  if (!/^[0-9a-fA-F]+$/.test(s) || s.length < 32 || s.length > 512 || s.length % 2 !== 0) return false;
+  if (isRepeated(s)) return false;
+  const kind = inferKind(s);
+  if ((kind === "ee" || kind === "dd") && isRepeated(s.slice(2, 34))) return false;
+  if (kind === "plain" && isRepeated(s.slice(0, 32))) return false;
+  return true;
+}
+
+function isRepeated(value) {
+  return value.length > 0 && /^(.)\1+$/.test(value);
 }
 
 export function goodPort(port) {
@@ -128,10 +151,39 @@ export function domainKey(server) {
 }
 
 function cleanServer(value) {
-  const server = String(value || "").trim();
+  const server = String(value || "").trim().replace(/\.$/, "");
   if (!server || server.length > 253) return "";
-  if (/[\s/?#\\]/.test(server)) return "";
-  return server;
+  if (/[\s/?#\\@<>"'`]/.test(server)) return "";
+  return isPublicHost(server) ? server : "";
+}
+
+function isPublicHost(server) {
+  const s = server.toLowerCase();
+  if (s === "localhost" || s.endsWith(".local") || s.endsWith(".internal") || s.endsWith(".localhost")) {
+    return false;
+  }
+  const m = s.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (m) {
+    const parts = m.slice(1);
+    if (parts.some((part) => part.length > 1 && part.startsWith("0"))) return false;
+    const n = parts.map(Number);
+    if (n.some((octet) => octet > 255)) return false;
+    const [a, b] = n;
+    if (a === 0 || a === 10 || a === 127) return false;
+    if (a === 169 && b === 254) return false;
+    if (a === 192 && b === 168) return false;
+    if (a === 172 && b >= 16 && b <= 31) return false;
+    if (a === 100 && b >= 64 && b <= 127) return false;
+    if (a >= 224) return false;
+    return true;
+  }
+  return /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}$/i.test(s);
+}
+
+function sanitizeCountry(value) {
+  const country = String(value || "").trim();
+  if (!/^[A-Za-z][A-Za-z .'-]{1,40}$/.test(country)) return "";
+  return country;
 }
 
 function asList(data) {
@@ -167,7 +219,7 @@ export function parseSource(name, data) {
     const port = Number(raw.port);
     const secret = String(raw.secret || "").trim();
     if (!server || !Number.isInteger(port) || port < 1 || port > 65535) continue;
-    if (!/^[0-9a-fA-F]+$/.test(secret) || secret.length < 16 || secret.length > 512) continue;
+    if (!isUsableSecret(secret)) continue;
     if (raw.alive === false) continue;
     const status = String(raw.status || "").toLowerCase();
     if (status === "down" || status === "dead" || status === "fail") continue;
@@ -180,16 +232,13 @@ export function parseSource(name, data) {
     const uptimePct = readUptime(raw);
     const checks = Number.isFinite(Number(raw.checks)) ? Math.round(Number(raw.checks)) : 0;
     const probe = readProbe(raw, status);
-    const given =
-      (typeof raw.link === "string" && raw.link.startsWith("https://t.me/proxy?") && raw.link) ||
-      (typeof raw.tg_url === "string" && raw.tg_url.startsWith("https://t.me/proxy?") && raw.tg_url) ||
-      "";
+    const country = sanitizeCountry(typeof raw.country === "string" ? raw.country : "");
     out.push({
       server,
       port,
       secret,
       kind,
-      country: typeof raw.country === "string" ? raw.country : "",
+      country,
       latencyMs,
       resilience,
       uptimePct,
@@ -198,7 +247,7 @@ export function parseSource(name, data) {
       reachableIr: reachable.includes("IR"),
       handshake: probe === "handshake",
       source: name,
-      link: given || proxyLink(server, port, secret),
+      link: proxyLink(server, port, secret),
       fingerprint: `${server.toLowerCase()}|${port}|${secret.toLowerCase()}`,
     });
   }
@@ -235,7 +284,8 @@ export function scoreProxy(p) {
   s += Math.round((p.uptimePct || 0) * 0.12);
   if ((p.checks || 0) >= 24) s += 10;
   if (typeof p.latencyMs === "number") {
-    if (p.latencyMs < 20) s -= 12;
+    if (p.latencyMs < 5) s -= 12;
+    else if (p.latencyMs < 20) s += 0;
     else if (p.latencyMs <= 180) s += 16;
     else if (p.latencyMs <= 400) s += 10;
     else if (p.latencyMs < 1500) s += 4;
@@ -318,6 +368,7 @@ function byScore(a, b) {
 }
 
 function saneLatency(p) {
+  // Sub-20ms figures are the checker's neighborhood, not a path from Iran.
   if (typeof p.latencyMs !== "number" || p.latencyMs < 20) return 99999;
   return p.latencyMs;
 }
@@ -343,13 +394,14 @@ function pickDiverse(pool, start, count) {
     if (seen.has(id)) return false;
     const host = String(item.server).toLowerCase();
     const secret = String(item.secret || "").toLowerCase();
+    const usableSecret = secret && secret !== "-";
     const domain = domainKey(item.server);
     if (hosts.has(host)) return false;
-    if (phase.secret && secret && secrets.has(secret)) return false;
+    if (phase.secret && usableSecret && secrets.has(secret)) return false;
     if (phase.domain && domains.has(domain)) return false;
     seen.add(id);
     hosts.add(host);
-    if (secret) secrets.add(secret);
+    if (usableSecret) secrets.add(secret);
     domains.add(domain);
     picked.push(item);
     return true;
@@ -382,7 +434,10 @@ function pickDiverse(pool, start, count) {
   return { picked, next: (begin + step) % n };
 }
 
-export function selectBatch(rows, { mode, cursor, count }) {
+export function selectBatch(rows, options) {
+  const mode = normalizeMode(options.mode);
+  const cursor = options.cursor;
+  const count = options.count;
   if (mode === "socks" || mode === "http") {
     const pool = rows.filter((p) => p.kind === mode).sort(byScore);
     const { picked, next } = pickDiverse(pool, cursor || 0, count);
@@ -421,6 +476,36 @@ export function selectBatch(rows, { mode, cursor, count }) {
   const iranTested = all.filter(isStrictIran).length;
   const fakeTls = all.filter((p) => p.kind === "ee").length;
   return { picked, next, note, poolSize: pool.length, total: all.length, iranTested, fakeTls };
+}
+
+export function normalizeMode(mode) {
+  if (mode === "iran" || mode === "one" || mode === "socks" || mode === "http") return mode;
+  return "best";
+}
+
+export function assembleFeeds(mtReports, endpointReports, { keepMt = 120, keepEndpoint = 40 } = {}) {
+  const mt = mergeProxies((mtReports || []).map((report) => report.rows || []));
+  const endpoints = mergeProxies((endpointReports || []).map((report) => report.rows || []));
+  const preferred = [];
+  const backup = [];
+  for (const item of mt) {
+    if (item.kind === "ee" && (item.reachableIr || item.handshake)) preferred.push(item);
+    else backup.push(item);
+  }
+  const socksAll = endpoints.filter((item) => item.kind === "socks");
+  const httpAll = endpoints.filter((item) => item.kind === "http");
+  const socksElite = socksAll.filter((item) => item.handshake);
+  const httpElite = httpAll.filter((item) => item.handshake);
+  const socks = (socksElite.length ? socksElite : socksAll).slice(0, keepEndpoint);
+  const http = (httpElite.length ? httpElite : httpAll).slice(0, keepEndpoint);
+  const proxies = preferred.concat(backup).slice(0, keepMt).concat(socks, http);
+  const reports = [...(mtReports || []), ...(endpointReports || [])].map((item) => ({
+    name: item.name,
+    ok: Boolean(item.ok),
+    count: item.count || 0,
+    error: item.error || "",
+  }));
+  return { proxies, reports };
 }
 
 export function foldText(text) {
